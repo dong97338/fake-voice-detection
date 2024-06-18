@@ -15,7 +15,6 @@ def parse_args():
     return parser.parse_args()
 
 args = parse_args()
-
 wandb.init(project="fake-voice-detection")
 
 train_audio_files_path = 'LA/LA/ASVspoof2019_LA_train/flac'
@@ -25,10 +24,8 @@ val_labels_path = 'LA/LA/ASVspoof2019_LA_cm_protocols/ASVspoof2019.LA.cm.dev.trl
 
 filename2label = get_labels(train_labels_path)
 val_filename2label = get_labels(val_labels_path)
-
 num_samples = 6 * 16000
 device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
-
 bit_length = torch.cuda.get_device_properties(args.gpu).total_memory.bit_length()
 
 if args.model == 'resnet':
@@ -53,8 +50,9 @@ wandb.config.update({"learning_rate": 0.001, "epochs": 15, "batch_size": batch_s
 for epoch in range(wandb.config.epochs):
     model.train()
     train_loss, y_true, y_pred = 0.0, [], []
-    for images, labels in tqdm(train_loader, desc=f'Epoch {epoch + 1}/{wandb.config.epochs}'):
-        images, labels = images.to(device), labels.to(device).reshape(-1, 1).type(torch.FloatTensor).to(device)
+    loop = tqdm(enumerate(train_loader), total=len(train_loader))
+    for _, (images, labels) in loop:
+        images, labels = images.to(device), labels.to(device).reshape(-1, 1).float().to(device)
         optimizer.zero_grad()
         outputs = model(images)
         loss = criterion(outputs, labels)
@@ -63,20 +61,30 @@ for epoch in range(wandb.config.epochs):
         train_loss += loss.item()
         y_true.append(labels.cpu().numpy())
         y_pred.append(outputs.detach().cpu().numpy())
-    
+        loop.set_postfix(Training_loss=loss.item())
+
     train_eer = EER(np.concatenate(y_true), np.concatenate(y_pred))
+
     model.eval()
     val_loss, y_true, y_pred = 0.0, [], []
+    val_loop = tqdm(val_loader, total=len(val_loader))
     with torch.no_grad():
-        for val_images, val_labels in tqdm(val_loader, desc='Validation'):
-            val_images, val_labels = val_images.to(device), val_labels.to(device).reshape(-1, 1).type(torch.FloatTensor).to(device)
+        for val_images, val_labels in val_loop:
+            val_images, val_labels = val_images.to(device), val_labels.to(device).reshape(-1, 1).float().to(device)
             val_outputs = model(val_images)
-            val_loss += criterion(val_outputs, val_labels).item()
             y_true.append(val_labels.cpu().numpy())
-            y_pred.append(val_outputs.detach().cpu().numpy())
+            y_pred.append(val_outputs.cpu().numpy())
+            loss = criterion(val_outputs, val_labels)
+            val_loss += loss.item()
+            val_loop.set_postfix(validation_loss=loss.item())
 
+    train_loss /= len(train_loader)
+    val_loss /= len(val_loader)
     val_eer = EER(np.concatenate(y_true), np.concatenate(y_pred))
-    wandb.log({"epoch": epoch + 1, "train_loss": train_loss / len(train_loader), "val_loss": val_loss / len(val_loader), "train_eer": train_eer, "val_eer": val_eer})
-    print(f'Epoch: {epoch+1}, Train Loss: {train_loss / len(train_loader)}, Train EER: {train_eer}, Val Loss: {val_loss / len(val_loader)}, Val EER: {val_eer}')
+    
+    # Log metrics to wandb
+    wandb.log({"epoch": epoch + 1, "train_loss": train_loss, "train_eer": train_eer, "val_loss": val_loss, "val_eer": val_eer})
+
+    print(f'Epoch {epoch + 1}: Train Loss: {train_loss}, Train EER: {train_eer}, Val Loss: {val_loss}, Val EER: {val_eer}')
 
 torch.save(model.state_dict(), f'model_{args.model}.pt')
