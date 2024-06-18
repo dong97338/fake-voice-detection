@@ -1,8 +1,8 @@
+import numpy as np
 import torch
 from torch import nn
 import torchaudio
 import timm
-import numpy as np
 import os
 from tqdm.auto import tqdm
 

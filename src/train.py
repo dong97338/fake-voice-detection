@@ -1,8 +1,8 @@
+import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 import torchaudio.transforms as transforms
-import numpy as np
 from tqdm.auto import tqdm
 from common import ASVSpoofDataset, ResNetModel, ASTModel, get_labels, EER
 import wandb
@@ -11,6 +11,7 @@ import argparse
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a model for ASV Spoof Detection")
     parser.add_argument('--model', choices=['resnet', 'ast'], default='resnet', help='Model type to use (resnet or ast)')
+    parser.add_argument('--gpu', type=int, default=0, help='GPU id to use (default: 0)')
     return parser.parse_args()
 
 args = parse_args()
@@ -26,19 +27,23 @@ filename2label = get_labels(train_labels_path)
 val_filename2label = get_labels(val_labels_path)
 
 num_samples = 6 * 16000
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
+
+bit_length = torch.cuda.get_device_properties(args.gpu).total_memory.bit_length()
 
 if args.model == 'resnet':
-    batch_size = 64
-    transforms = transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=512, n_mels=64)
+    transform = transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=512, n_mels=64)
     model = ResNetModel().to(device)
+    batch_size = 1 << bit_length - 27
 else:
-    batch_size = 4
-    transforms = None
+    transform = None
     model = ASTModel().to(device)
+    batch_size = 1 << bit_length - 31
 
-train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transforms), shuffle=True, batch_size=batch_size)
-val_loader = DataLoader(ASVSpoofDataset(val_audio_files_path, num_samples, val_filename2label, transforms), shuffle=True, batch_size=1024)
+print(f'Using batch size: {batch_size}')
+
+train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform), shuffle=True, batch_size=batch_size)
+val_loader = DataLoader(ASVSpoofDataset(val_audio_files_path, num_samples, val_filename2label, transform), shuffle=True, batch_size=1024)
 
 criterion = nn.BCELoss()
 optimizer = optim.Adam(model.parameters())
