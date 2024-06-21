@@ -1,10 +1,15 @@
-# test.py
 import torch
 import numpy as np
+import argparse
 from sklearn.metrics import roc_auc_score, classification_report, ConfusionMatrixDisplay
 from tqdm.auto import tqdm
-from common import ASVSpoofDataset, Model, get_labels, EER
+from common import ASVSpoofDataset, ResNetModel, get_labels, EER
 import torchaudio.transforms as transforms
+
+# Argument parser for model path
+parser = argparse.ArgumentParser(description='Test ASVspoof model')
+parser.add_argument('--model', type=str, required=True, help='Path to the saved model')
+args = parser.parse_args()
 
 # Paths
 test_audio_files_path = 'LA/LA/ASVspoof2019_LA_eval/flac'
@@ -21,8 +26,8 @@ test_loader = torch.utils.data.DataLoader(test_dataset, shuffle=True, batch_size
 
 # Load the saved model
 device = ('cuda' if torch.cuda.is_available() else 'cpu')
-model = Model().to(device)
-model.load_state_dict(torch.load('resnet200d.pt'))
+model = ResNetModel().to(device)
+model.load_state_dict(torch.load(args.model))
 model.eval()
 
 # Criterion
