@@ -5,22 +5,27 @@ import torchaudio
 import timm
 import os
 from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+from transformers import ASTFeatureExtractor, ASTModel, ASTConfig
+import random
 
-# ASVSpoof Dataset class
 class ASVSpoofDataset(torch.utils.data.Dataset):
-    def __init__(self, audio_dir_path, num_samples, filename2label, transforms=None):
+    def __init__(self, audio_dir_path, num_samples, filename2label, transforms=None, augment=False):
         super().__init__()
         self.audio_dir_path = audio_dir_path
         self.num_samples = num_samples
         self.audio_file_names = [name + '.flac' for name in filename2label.keys()]
         self.labels, self.label2id = self.encode_labels(filename2label)
         self.transforms = transforms
+        self.augment = augment
         
     def __getitem__(self, index):
         signal, sr = torchaudio.load(os.path.join(self.audio_dir_path, self.audio_file_names[index]))
         signal = self.preprocess(signal)
         if self.transforms:
             signal = self.transforms(signal)
+        if self.augment:
+            signal = self.audio_augment(signal)
         return signal, self.labels[index]
     
     def __len__(self):
@@ -41,6 +46,23 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
             signal = torch.nn.functional.pad(signal, pad_last_dim)
         return signal
 
+    def audio_augment(self, signal):
+        signal = time_shift(signal)
+        signal = add_noise(signal)
+        return signal
+
+def time_shift(signal, shift_max=0.2, prob=0.5):
+    if random.random() < prob:
+        shift = int(random.uniform(-shift_max, shift_max) * signal.shape[1])
+        signal = torch.roll(signal, shift)
+    return signal
+
+def add_noise(signal, noise_factor=0.005, prob=0.5):
+    if random.random() < prob:
+        noise = torch.randn_like(signal) * noise_factor
+        signal = signal + noise
+    return signal
+
 # Model classes
 class ResNetModel(nn.Module):
     def __init__(self):
@@ -56,23 +78,27 @@ class ResNetModel(nn.Module):
         x = self.custom_layers(x)
         return x
 
-class ASTModel(nn.Module):
+class ASTModelWrapper(nn.Module):
     def __init__(self):
         super().__init__()
-        from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
-        self.extractor = AutoFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-        self.model = AutoModelForAudioClassification.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+
+        self.extractor = ASTFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+        self.model = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+        
         self.pooling = nn.AdaptiveAvgPool2d((1, self.model.config.hidden_size))
         self.classifier = nn.Linear(self.model.config.hidden_size, 1)  # Add a classification layer
 
     def forward(self, inputs):
         inputs = inputs.cpu()  # Move to CPU
-        inputs = self.extractor(inputs.squeeze(1).numpy(), sampling_rate=16000, return_tensors="pt", padding=True)
+
+        # Squeeze and convert to numpy
+        inputs_np = inputs.squeeze(1).numpy()
+        inputs = self.extractor(inputs_np, sampling_rate=16000, return_tensors="pt", padding=True)
         inputs = {key: value.to(next(self.model.parameters()).device) for key, value in inputs.items()}  # Move to the same device as the model
         outputs = self.model(**inputs)
-        pooled_output = self.pooling(outputs.logits.unsqueeze(1)).squeeze(1)  # Pool the output
+        pooled_output = self.pooling(outputs.last_hidden_state.unsqueeze(1)).squeeze(1)  # Use last_hidden_state instead of logits
         logits = self.classifier(pooled_output)  # Apply the classification layer
-        return torch.sigmoid(logits)  # Use sigmoid activation for binary classification
+        return torch.sigmoid(logits).squeeze(-1)  # Use sigmoid activation for binary classification and squeeze the output
 
 # Utility function to load labels
 def get_labels(path):
