@@ -4,9 +4,10 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 import torchaudio.transforms as transforms
 from tqdm.auto import tqdm
-from common import ASVSpoofDataset, ResNetModel, ASTModel, get_labels, EER
+from common import ASVSpoofDataset, ResNetModel, ASTModelWrapper, get_labels, EER
 import wandb
 import argparse
+import os
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a model for ASV Spoof Detection")
@@ -34,13 +35,21 @@ if args.model == 'resnet':
     batch_size = 1 << bit_length - 27
 else:
     transform = None
-    model = ASTModel().to(device)
-    batch_size = 1 << bit_length - 31
+    model = ASTModelWrapper().to(device)
+    batch_size = 1 << bit_length - 32
 
 print(f'Using batch size: {batch_size}')
 
-train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform), shuffle=True, batch_size=batch_size)
-val_loader = DataLoader(ASVSpoofDataset(val_audio_files_path, num_samples, val_filename2label, transform), shuffle=True, batch_size=1024)
+# Check if augmented data exists
+augmented_train_path = 'augmented_train_data.pt'
+
+if not os.path.exists(augmented_train_path):
+    train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform, augment=True), shuffle=True, batch_size=batch_size)
+    torch.save([x for x in train_loader], augmented_train_path)
+else:
+    train_loader = DataLoader(torch.load(augmented_train_path), batch_size=batch_size, shuffle=True)
+
+val_loader = DataLoader(ASVSpoofDataset(val_audio_files_path, num_samples, val_filename2label, transform), shuffle=False, batch_size=batch_size<<2)
 
 criterion = nn.BCELoss()
 optimizer = optim.Adam(model.parameters())
