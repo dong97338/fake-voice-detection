@@ -1,24 +1,30 @@
+import os
+import random
+from dataclasses import dataclass, field
+
 import numpy as np
 import torch
-from torch import nn
 import torchaudio
 import timm
-import os
+from torch import nn
 from tqdm.auto import tqdm
-import matplotlib.pyplot as plt
-from transformers import ASTFeatureExtractor, ASTModel, ASTConfig
-import random
+from transformers import ASTFeatureExtractor, ASTModel
 
+@dataclass
 class ASVSpoofDataset(torch.utils.data.Dataset):
-    def __init__(self, audio_dir_path, num_samples, filename2label, transforms=None, augment=False):
-        super().__init__()
-        self.audio_dir_path = audio_dir_path
-        self.num_samples = num_samples
-        self.audio_file_names = [name + '.flac' for name in filename2label.keys()]
-        self.labels, self.label2id = self.encode_labels(filename2label)
-        self.transforms = transforms
-        self.augment = augment
-        
+    audio_dir_path: str
+    num_samples: int
+    filename2label: dict
+    transforms: nn.Module = None
+    augment: bool = False
+    audio_file_names: list = field(init=False)
+    labels: list = field(init=False)
+    label2id: dict = field(default_factory=lambda: {'spoof': 0, 'bonafide': 1})
+
+    def __post_init__(self):
+        self.audio_file_names = [name + '.flac' for name in self.filename2label.keys()]
+        self.labels = [self.label2id[label] for label in self.filename2label.values()]
+
     def __getitem__(self, index):
         signal, sr = torchaudio.load(os.path.join(self.audio_dir_path, self.audio_file_names[index]))
         signal = self.preprocess(signal)
@@ -27,15 +33,10 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
         if self.augment:
             signal = self.audio_augment(signal)
         return signal, self.labels[index]
-    
+
     def __len__(self):
         return len(self.labels)
-    
-    def encode_labels(self, filename2label):
-        labels = list(filename2label.values())
-        label2id = {'spoof': 0, 'bonafide': 1}
-        return [label2id[label] for label in labels], label2id
-    
+
     def preprocess(self, signal):
         if signal.shape[0] > 1:
             signal = torch.mean(signal, dim=0, keepdims=True)
@@ -47,23 +48,23 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
         return signal
 
     def audio_augment(self, signal):
-        signal = time_shift(signal)
-        signal = add_noise(signal)
+        signal = self.time_shift(signal)
+        signal = self.add_noise(signal)
         return signal
 
-def time_shift(signal, shift_max=0.2, prob=0.5):
-    if random.random() < prob:
-        shift = int(random.uniform(-shift_max, shift_max) * signal.shape[1])
-        signal = torch.roll(signal, shift)
-    return signal
+    def time_shift(self, signal, shift_max=0.2, prob=0.5):
+        if random.random() < prob:
+            shift = int(random.uniform(-shift_max, shift_max) * signal.shape[1])
+            signal = torch.roll(signal, shift)
+        return signal
 
-def add_noise(signal, noise_factor=0.005, prob=0.5):
-    if random.random() < prob:
-        noise = torch.randn_like(signal) * noise_factor
-        signal = signal + noise
-    return signal
+    def add_noise(self, signal, noise_factor=0.005, prob=0.5):
+        if random.random() < prob:
+            noise = torch.randn_like(signal) * noise_factor
+            signal = signal + noise
+        return signal
 
-# Model classes
+
 class ResNetModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -72,44 +73,40 @@ class ResNetModel(nn.Module):
             param.requires_grad = False
         self.features = nn.Sequential(*list(self.model.children())[:-2])
         self.custom_layers = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(self.model.num_features, 1), nn.Sigmoid())
-        
+
     def forward(self, inputs):
         x = self.features(inputs)
         x = self.custom_layers(x)
         return x
 
+
 class ASTModelWrapper(nn.Module):
     def __init__(self):
         super().__init__()
-
         self.extractor = ASTFeatureExtractor.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
         self.model = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-        
         self.pooling = nn.AdaptiveAvgPool2d((1, self.model.config.hidden_size))
-        self.classifier = nn.Linear(self.model.config.hidden_size, 1)  # Add a classification layer
+        self.classifier = nn.Linear(self.model.config.hidden_size, 1)
 
     def forward(self, inputs):
-        inputs = inputs.cpu()  # Move to CPU
-
-        # Squeeze and convert to numpy
+        inputs = inputs.cpu()
         inputs_np = inputs.squeeze(1).numpy()
         inputs = self.extractor(inputs_np, sampling_rate=16000, return_tensors="pt", padding=True)
-        inputs = {key: value.to(next(self.model.parameters()).device) for key, value in inputs.items()}  # Move to the same device as the model
+        inputs = {key: value.to(next(self.model.parameters()).device) for key, value in inputs.items()}
         outputs = self.model(**inputs)
-        pooled_output = self.pooling(outputs.last_hidden_state.unsqueeze(1)).squeeze(1)  # Use last_hidden_state instead of logits
-        logits = self.classifier(pooled_output)  # Apply the classification layer
-        return torch.sigmoid(logits).squeeze(-1)  # Use sigmoid activation for binary classification and squeeze the output
+        pooled_output = self.pooling(outputs.last_hidden_state.unsqueeze(1)).squeeze(1)
+        logits = self.classifier(pooled_output)
+        return torch.sigmoid(logits).squeeze(-1)
 
-# Utility function to load labels
+
 def get_labels(path):
     with open(path, 'r') as file:
         text = file.read().splitlines()
     return {item.split(' ')[1]: item.split(' ')[-1] for item in tqdm(text)}
 
-# EER function
+
 def EER(labels, outputs):
     from sklearn.metrics import roc_curve
     fpr, tpr, threshold = roc_curve(labels, outputs, pos_label=1)
     fnr = 1 - tpr
-    eer = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
-    return eer
+    return fpr[np.nanargmin(np.absolute((fnr - fpr)))]
