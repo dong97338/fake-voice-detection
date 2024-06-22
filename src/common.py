@@ -10,6 +10,7 @@ from torch import nn
 from tqdm.auto import tqdm
 from transformers import ASTFeatureExtractor, ASTModel
 
+
 @dataclass
 class ASVSpoofDataset(torch.utils.data.Dataset):
     audio_dir_path: str
@@ -48,9 +49,20 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
         return signal
 
     def audio_augment(self, signal):
+        signal = self.trim_audio(signal)
         signal = self.time_shift(signal)
         signal = self.add_noise(signal)
+        signal = self.crop_or_pad(signal)
         return signal
+
+    def trim_audio(self, audio, epsilon=0.15):
+        # Find indices where the absolute value of the signal is greater than epsilon
+        non_silent_indices = torch.where(torch.abs(audio) > epsilon)[1]
+        if len(non_silent_indices) > 0:
+            start_idx = non_silent_indices[0].item()
+            end_idx = non_silent_indices[-1].item() + 1
+            audio = audio[:, start_idx:end_idx]
+        return audio
 
     def time_shift(self, signal, shift_max=0.2, prob=0.5):
         if random.random() < prob:
@@ -63,6 +75,36 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
             noise = torch.randn_like(signal) * noise_factor
             signal = signal + noise
         return signal
+
+    def crop_or_pad(self, audio, target_len=64, pad_mode='constant'):
+        if target_len is None:
+            target_len = self.num_samples
+        audio_len = audio.shape[1]
+        if audio_len < target_len:  # if audio_len is smaller than target_len then use Padding
+            diff_len = (target_len - audio_len)
+            pad1 = random.randint(0, diff_len)  # select random location for padding
+            pad2 = diff_len - pad1
+            padding = (pad1, pad2)
+            audio = torch.nn.functional.pad(audio, (0, 0, padding[0], padding[1]), mode=pad_mode)  # apply padding
+        elif audio_len > target_len:  # if audio_len is larger than target_len then use Cropping
+            diff_len = (audio_len - target_len)
+            idx = random.randint(0, diff_len)  # select random location for cropping
+            audio = audio[:, :, idx: (idx + target_len)]
+        return audio
+
+
+    def gaussian_noise(self, audio, std_min=0.0025, std_max=0.025, prob=0.5):
+        if random.random() < prob:
+            std = random.uniform(std_min, std_max)
+            noise = torch.randn_like(audio) * std
+            audio = audio + noise
+        return audio
+
+    def normalize(self, audio):
+        mean = torch.mean(audio)
+        std = torch.std(audio)
+        audio = (audio - mean) / (std + 1e-6)
+        return audio
 
 
 class ResNetModel(nn.Module):
