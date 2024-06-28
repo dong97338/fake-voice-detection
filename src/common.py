@@ -17,7 +17,7 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
     num_samples: int
     filename2label: dict
     transforms: nn.Module = None
-    augment: bool = False
+    augment: str = '1111'
     audio_file_names: list = field(init=False)
     labels: list = field(init=False)
     label2id: dict = field(default_factory=lambda: {'spoof': 0, 'bonafide': 1})
@@ -31,7 +31,7 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
         signal = self.preprocess(signal)
         if self.transforms:
             signal = self.transforms(signal)
-        if self.augment:
+        if '1' in self.augment:
             signal = self.audio_augment(signal)
         return signal, self.labels[index]
 
@@ -49,10 +49,14 @@ class ASVSpoofDataset(torch.utils.data.Dataset):
         return signal
 
     def audio_augment(self, signal):
-        signal = self.trim_audio(signal)
-        signal = self.time_shift(signal)
-        signal = self.add_noise(signal)
-        signal = self.crop_or_pad(signal)
+        if self.augment[0] == '1':
+            signal = self.trim_audio(signal)
+        if self.augment[1] == '1':
+            signal = self.time_shift(signal)
+        if self.augment[2] == '1':
+            signal = self.add_noise(signal)
+        if self.augment[3] == '1':
+            signal = self.crop_or_pad(signal) #(1,64,388)
         return signal
 
     def trim_audio(self, audio, epsilon=0.15):
@@ -139,6 +143,22 @@ class ASTModelWrapper(nn.Module):
         pooled_output = self.pooling(outputs.last_hidden_state.unsqueeze(1)).squeeze(1)
         logits = self.classifier(pooled_output)
         return torch.sigmoid(logits).squeeze(-1)
+    
+class EfficientViTModelWrapper(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = timm.create_model('efficientvit_b3.r288_in1k', pretrained=False)
+        for param in list(self.model.parameters())[:39]:
+            param.requires_grad = False
+        self.features = nn.Sequential(*list(self.model.children())[:-2])
+        self.pooling = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Sequential(nn.Flatten(), nn.Linear(self.model.num_features, 1), nn.Sigmoid())
+
+    def forward(self, inputs):
+        x = self.features(inputs)
+        x = self.pooling(x)
+        x = self.classifier(x)
+        return x
 
 
 def get_labels(path):
