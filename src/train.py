@@ -4,15 +4,16 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 import torchaudio.transforms as transforms
 from tqdm.auto import tqdm
-from common import ASVSpoofDataset, ResNetModel, ASTModelWrapper, get_labels, EER
+from common import ASVSpoofDataset, ResNetModel, ASTModelWrapper,EfficientViTModelWrapper, get_labels, EER
 import wandb
 import argparse
 import os
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a model for ASV Spoof Detection")
-    parser.add_argument('--model', choices=['resnet', 'ast'], default='resnet', help='Model type to use (resnet or ast)')
+    parser.add_argument('--model', choices=['resnet', 'ast', 'vit'], default='resnet', help='Model type to use (resnet or ast)')
     parser.add_argument('--gpu', type=int, default=0, help='GPU id to use (default: 0)')
+    parser.add_argument('--audio', type=str, default='1111', help='Binary string to set audio augmentations (default: 1111)')
     return parser.parse_args()
 
 args = parse_args()
@@ -33,6 +34,10 @@ if args.model == 'resnet':
     transform = transforms.MelSpectrogram(sample_rate=16000, n_fft=1024, hop_length=512, n_mels=64)
     model = ResNetModel().to(device)
     batch_size = 1 << bit_length - 27
+elif args.model == 'vit':
+    transform = None
+    model = EfficientViTModelWrapper().to(device)
+    batch_size = 1 << bit_length - 27
 else:
     transform = None
     model = ASTModelWrapper().to(device)
@@ -41,10 +46,10 @@ else:
 print(f'Using batch size: {batch_size}')
 
 # Check if augmented data exists
-augmented_train_path = 'augmented_train_data.pt'
+augmented_train_path = f'augmented_{args.audio}_train_data.pt'
 
 if not os.path.exists(augmented_train_path):
-    train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform, augment=True), shuffle=True, batch_size=batch_size)
+    train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform, augment=args.audio), shuffle=True, batch_size=batch_size)
     torch.save([x for x in train_loader], augmented_train_path)
 else:
     train_loader = DataLoader(torch.load(augmented_train_path), batch_size=batch_size, shuffle=True)
@@ -96,4 +101,4 @@ for epoch in range(wandb.config.epochs):
 
     print(f'Epoch {epoch + 1}: Train Loss: {train_loss}, Train EER: {train_eer}, Val Loss: {val_loss}, Val EER: {val_eer}')
 
-torch.save(model.state_dict(), f'model_{args.model}.pt')
+torch.save(model.state_dict(), f'model_{args.model}_{args.audio}.pt')
