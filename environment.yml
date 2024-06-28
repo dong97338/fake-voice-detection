@@ -1,19 +1,19 @@
-name: fake-voice-detection
+name: ADD
 channels:
   - defaults
   - pytorch
 dependencies:
-  - python=3.8
+  - python=3.10
   - numpy
-  - pytorch=1.12.1
-  - torchvision=0.13.1
-  - cudatoolkit=11.3
+  - pytorch=2.0.1
+  - torchvision
+  # - cudatoolkit=12.3
   - tqdm
   - matplotlib
   - scikit-learn
   - pip
   - pip:
-    - torchaudio==0.12.1
+    - torchaudio==2.0.1
     - timm
     - wandb
     - transformers
