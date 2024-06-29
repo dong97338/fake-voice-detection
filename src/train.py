@@ -19,6 +19,7 @@ def parse_args():
 args = parse_args()
 wandb.init(project="fake-voice-detection")
 
+
 train_audio_files_path = 'LA/LA/ASVspoof2019_LA_train/flac'
 train_labels_path = 'LA/LA/ASVspoof2019_LA_cm_protocols/ASVspoof2019.LA.cm.train.trn.txt'
 val_audio_files_path = 'LA/LA/ASVspoof2019_LA_dev/flac'
@@ -45,14 +46,15 @@ else:
 
 print(f'Using batch size: {batch_size}')
 
-# Check if augmented data exists
-augmented_train_path = f'augmented_{args.audio}_train_data.pt'
+augmented_train_path = f'augmented_{args.audio}_train_data_2.pt'
 
 if not os.path.exists(augmented_train_path):
-    train_loader = DataLoader(ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform, augment=args.audio), shuffle=True, batch_size=batch_size)
-    torch.save([x for x in train_loader], augmented_train_path)
+    train_dataset = ASVSpoofDataset(train_audio_files_path, num_samples, filename2label, transform, augment=args.audio)
+    train_loader = DataLoader(train_dataset, shuffle=True, batch_size=batch_size)
+    torch.save(train_dataset, augmented_train_path)
 else:
-    train_loader = DataLoader(torch.load(augmented_train_path), batch_size=batch_size, shuffle=True)
+    train_dataset = torch.load(augmented_train_path)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 val_loader = DataLoader(ASVSpoofDataset(val_audio_files_path, num_samples, val_filename2label, transform), shuffle=False, batch_size=batch_size<<2)
 
