@@ -1,6 +1,13 @@
 LA/
 PA/
+src/train/
+src/test/
+src/unlabeled_data
+src/train.csv
+src/test.csv
+src/sample_submission.csv
 wandb/
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
